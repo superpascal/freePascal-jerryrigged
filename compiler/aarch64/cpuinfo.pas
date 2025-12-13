@@ -70,8 +70,8 @@ Type
 
 
 Const
-   fputypestrllvm : array[tfputype] of string[6] = ('',
-     ''
+   fputypestrllvm : array[tfputype] of string[15] = ('',
+     'fpu=vfp'
    );
 
    { Is there support for dealing with multiple microcontrollers available }

@@ -1,0 +1,40 @@
+# Local Makefile extension for SuperPascal
+# This file is included at the end of the main Makefile
+
+.PHONY: fix-permissions fix-permissions-aarch64
+
+# Fix permissions for aarch64 build directories
+# Removes root-owned directories and recreates them with proper permissions
+# Note: This requires sudo, so it may prompt for password
+fix-permissions-aarch64:
+	@echo "Fixing permissions for aarch64 directories..."
+	@echo "Running fix-permissions.sh (may require sudo password)..."
+	@./fix-permissions.sh || (echo "Warning: Could not fix permissions. Run: sudo rm -rf aarch64 && mkdir -p aarch64/units/aarch64-darwin aarch64/bin/aarch64-darwin" && exit 1)
+
+# Fix permissions for all build directories
+fix-permissions:
+	@echo "Fixing permissions for build directories..."
+	@for dir in aarch64 i386 x86_64 arm m68k powerpc sparc; do \
+		if [ -d $$dir ]; then \
+			chmod -R u+w $$dir 2>/dev/null || true; \
+			find $$dir -type d -exec chmod u+w {} \; 2>/dev/null || true; \
+			find $$dir -type f -exec chmod u+w {} \; 2>/dev/null || true; \
+		fi; \
+	done
+
+# Enhanced clean that fixes permissions first
+clean-fixed: fix-permissions
+	$(MAKE) clean
+
+# Enhanced cycle that fixes permissions first and skips problematic clean
+cycle-fixed: fix-permissions-aarch64
+	@echo "Creating build directories..."
+	@mkdir -p aarch64/units/aarch64-darwin aarch64/bin/aarch64-darwin
+	@chmod -R u+w aarch64 2>/dev/null || true
+	@echo "Starting build cycle (skipping clean due to permission issues)..."
+	$(MAKE) cycle OPT="-n" || $(MAKE) compiler OPT="-n"
+
+# Enhanced build that fixes permissions first
+all-fixed: fix-permissions
+	$(MAKE) all
+

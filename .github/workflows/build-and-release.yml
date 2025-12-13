@@ -1,0 +1,237 @@
+name: Build and Release FreePascal
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  FPC_VERSION: "3.2.2"  # Update this to match your FPC version
+  RELEASE_NAME: "SuperPascal FPC Fork"
+
+jobs:
+  build-linux-x86_64:
+    name: Build Linux x86_64
+    runs-on: ubuntu-20.04  # Ubuntu 20.04 has reliable FPC support via apt
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            binutils \
+            gdb \
+            libncurses5-dev \
+            libncurses5 \
+            zlib1g-dev \
+            libc6-dev
+
+      - name: Install FreePascal (bootstrap)
+        run: |
+          # On Ubuntu 20.04, FPC is available via apt-get
+          # Reference: https://www.streetinfo.lu/computing/lazarus/project/install_debian.html
+          echo "Installing FreePascal from Ubuntu repositories..."
+          sudo apt-get install -y fpc || {
+            echo "Failed to install FPC from Ubuntu repositories"
+            exit 1
+          }
+          
+          # Verify installation
+          if command -v fpc >/dev/null 2>&1 || command -v ppcx64 >/dev/null 2>&1; then
+            FPC_FOUND=$(command -v fpc || command -v ppcx64)
+            echo "✓ FPC installed: $FPC_FOUND"
+            $FPC_FOUND -iV || echo "Version check failed (continuing)"
+          else
+            echo "✗ FPC installation verification failed"
+            echo "Searching for FPC binaries..."
+            find /usr -name "ppcx64" -o -name "fpc" 2>/dev/null | head -5 || true
+            exit 1
+          fi
+
+      - name: Find bootstrap FPC
+        run: |
+          # On Ubuntu 20.04, FPC from apt-get installs 'fpc' wrapper in /usr/bin
+          # The actual compiler (ppcx64) is typically in /usr/lib/fpc/<version>/
+          export PATH="/usr/bin:/usr/local/bin:$PATH"
+          echo "PATH=$PATH" >> $GITHUB_ENV
+          
+          # Find FPC binary (prefer 'fpc' wrapper)
+          FPC_BIN=$(command -v fpc || command -v ppcx64 || echo "")
+          
+          if [ -z "$FPC_BIN" ]; then
+            echo "Error: Bootstrap FPC not found"
+            echo "Searching for FPC in common locations..."
+            find /usr/bin /usr/lib/fpc -name "fpc" -o -name "ppcx64" 2>/dev/null | head -5 || true
+            exit 1
+          fi
+          
+          echo "Using bootstrap FPC: $FPC_BIN"
+          $FPC_BIN -iV || echo "Version check failed (continuing anyway)"
+          echo "FPC_BIN=$FPC_BIN" >> $GITHUB_ENV
+          echo "FPC_BIN_DIR=$(dirname $FPC_BIN)" >> $GITHUB_ENV
+
+      - name: Build FPC RTL
+        run: |
+          # Build RTL first (required before building compiler)
+          # Use root Makefile which handles RTL build correctly
+          make rtl_clean OS_TARGET=linux CPU_TARGET=x86_64 FPC="$FPC_BIN" || true
+          make rtl OS_TARGET=linux CPU_TARGET=x86_64 FPC="$FPC_BIN" FPMAKEOPT="-T $(nproc)" "OPT=-n" -j$(nproc)
+
+      - name: Build FPC compiler
+        working-directory: compiler
+        run: |
+          make clean
+          # Build only native compiler using bootstrap FPC, skip cross-compilers
+          # Use 'compiler' target instead of 'cycle' to avoid cross-compiler builds
+          make compiler FPC="$FPC_BIN" OS_TARGET=linux CPU_TARGET=x86_64 OPT="-n" -j$(nproc)
+
+      - name: Build FPC RTL and packages
+        run: |
+          make -j$(nproc) all OS_TARGET=linux CPU_TARGET=x86_64 FPMAKEOPT="-T $(nproc)" "OPT=-n"
+
+      - name: Create release archive
+        run: |
+          mkdir -p release/fpc-linux-x86_64/bin
+          mkdir -p release/fpc-linux-x86_64/lib
+          cp compiler/ppcx64 release/fpc-linux-x86_64/bin/
+          cp -r compiler/units release/fpc-linux-x86_64/lib/ 2>/dev/null || true
+          cp -r rtl/units release/fpc-linux-x86_64/lib/ 2>/dev/null || true
+          tar -czf fpc-linux-x86_64.tar.gz -C release fpc-linux-x86_64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpc-linux-x86_64
+          path: fpc-linux-x86_64.tar.gz
+          retention-days: 30
+
+  # Note: macOS builds (ARM64 and x86_64) are built locally for testing
+  # Only Linux x86_64 is built on GitHub Actions for CI/CD
+
+  release:
+    name: Create Release
+    needs: [test-token-dump]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine release version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/}
+          else
+            VERSION="dev-$(date +%Y%m%d)-${GITHUB_SHA::8}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Release version: $VERSION"
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          for file in *.tar.gz; do
+            sha256sum "$file" > "${file}.sha256"
+          done
+
+      - name: Create release notes
+        run: |
+          cat > release-notes.md << EOF
+          # ${{ env.RELEASE_NAME }} ${{ steps.version.outputs.version }}
+
+          This release contains the SuperPascal patched FreePascal compiler with token dumping support (\`-dt\` flag).
+
+          ## Changes
+          - Added \`-dt\` flag for token dumping
+          - Patched scanner to output tokens in parseable format
+          - Built for Linux x86_64
+
+          ## Platforms
+          - **Linux x86_64** (built on GitHub Actions)
+          - **macOS ARM64/x86_64** (built locally - see CONTRIBUTING.md)
+
+          ## Usage
+
+          Extract the archive and add the \`bin\` directory to your PATH.
+
+          Example:
+          \`\`\`bash
+          tar -xzf fpc-linux-x86_64.tar.gz
+          export PATH=\$PWD/fpc-linux-x86_64/bin:\$PATH
+          ppcx64 -dt yourfile.pas
+          \`\`\`
+
+          ## Building macOS Versions Locally
+
+          See \`CONTRIBUTING.md\` in the SuperPascal repository for instructions on building macOS versions locally.
+
+          ## Checksums
+          \`\`\`
+          $(cat artifacts/*.sha256)
+          \`\`\`
+          EOF
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: "${{ env.RELEASE_NAME }} ${{ steps.version.outputs.version }}"
+          body_path: release-notes.md
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+          draft: false
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+  test-token-dump:
+    name: Test Token Dump
+    needs: [build-linux-x86_64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: fpc-linux-x86_64
+          path: fpc
+
+      - name: Extract and setup
+        run: |
+          cd fpc
+          tar -xzf *.tar.gz
+          export PATH=$PWD/*/bin:$PATH
+          which ppcx64 || find . -name "ppcx64" -type f
+
+      - name: Test token dump
+        run: |
+          cd fpc
+          export PATH=$PWD/*/bin:$PATH
+          cat > test.pas << 'EOF'
+          program Test;
+          begin
+            WriteLn('Hello, World!');
+          end.
+          EOF
+          ppcx64 -dt test.pas 2>&1 | head -20
+

@@ -329,6 +329,7 @@ Const
 {$ifdef PREPROCWRITE}
        parapreprocess    : boolean;
 {$endif PREPROCWRITE}
+       para_dump_tokens  : boolean;
        printnodefile     : text;
 
        {  typical cross compiling params}
@@ -1810,6 +1811,13 @@ implementation
 
         { enable all features by default }
         features:=[low(Tfeature)..high(Tfeature)];
+
+        { Initialize para flags }
+        para_dump_tokens:=false;
+{$ifdef PREPROCWRITE}
+        parapreprocess:=false;
+{$endif PREPROCWRITE}
+        paraprintnodetree:=0;
 
         callinitprocs;
      end;

@@ -6654,6 +6654,17 @@ type
         end;
 exit_label:
         lasttoken:=token;
+        
+        { Dump token if requested }
+        if para_dump_tokens then
+          begin
+            if token=_ID then
+              writeln(TokenKindToString(token), ' [', pattern, '] (', line_no, ':', inputpointer - inputstart, ')')
+            else if token in [_INTCONST, _REALNUMBER, _CSTRING, _CCHAR] then
+              writeln(TokenKindToString(token), ' [', pattern, '] (', line_no, ':', inputpointer - inputstart, ')')
+            else
+              writeln(TokenKindToString(token), ' [] (', line_no, ':', inputpointer - inputstart, ')');
+          end;
       end;
 
 
