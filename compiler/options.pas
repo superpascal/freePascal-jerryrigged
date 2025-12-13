@@ -2914,6 +2914,12 @@ Var
   hs : string;
 
 begin
+    { Check for -dt (dump tokens) option first }
+    if more='t' then
+      begin
+        para_dump_tokens:=true;
+        exit;
+      end;
     l:=Pos(':=',more);
     DefaultReplacements(more);
     if l>0 then

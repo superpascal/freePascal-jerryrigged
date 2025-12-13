@@ -750,6 +750,7 @@ var
 procedure inittokens;
 procedure donetokens;
 procedure create_tokenidx;
+function TokenKindToString(t: ttoken): string;
 
 
 implementation
@@ -816,6 +817,15 @@ begin
     jvmtokenidx:=nil;
 {$endif jvm}
   end;
+end;
+
+
+function TokenKindToString(t: ttoken): string;
+begin
+  if assigned(tokeninfo) and (t >= low(ttoken)) and (t <= high(ttoken)) then
+    result := tokeninfo^[t].str
+  else
+    result := 'UNKNOWN_TOKEN';
 end;
 
 end.
